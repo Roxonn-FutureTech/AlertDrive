@@ -1,0 +1,26 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"type": "gradle",
+			"id": "/Users/dineshrampalli/AndroidStudioProjects/DrowsyDriverAppbuildEnvironmentDrowsyDriverApp",
+			"script": "buildEnvironment",
+			"description": "Displays all buildscript dependencies declared in root project 'DrowsyDriverApp'.",
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"project": "DrowsyDriverApp",
+			"buildFile": "/Users/dineshrampalli/AndroidStudioProjects/DrowsyDriverApp/build.gradle.kts",
+			"rootProject": "DrowsyDriverApp",
+			"projectFolder": "/Users/dineshrampalli/AndroidStudioProjects/DrowsyDriverApp",
+			"workspaceFolder": "/Users/dineshrampalli/AndroidStudioProjects/DrowsyDriverApp",
+			"args": "",
+			"javaDebug": false,
+			"problemMatcher": [
+				"$gradle"
+			],
+			"label": "gradle: buildEnvironment"
+		}
+	]
+}
