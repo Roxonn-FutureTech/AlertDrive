@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.drowsydriverapp.data.DrowsinessRepository
 import com.example.drowsydriverapp.data.models.*
+import com.example.drowsydriverapp.utils.SoundManager
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.Face
 import com.google.mlkit.vision.face.FaceDetection
@@ -16,6 +17,7 @@ import java.util.*
 
 class DrowsinessViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = DrowsinessRepository(application)
+    private val soundManager = SoundManager(application)
     private val _drowsinessState = MutableStateFlow(DrowsinessState())
     val drowsinessState: StateFlow<DrowsinessState> = _drowsinessState.asStateFlow()
 
@@ -209,33 +211,40 @@ class DrowsinessViewModel(application: Application) : AndroidViewModel(applicati
 
     fun updateDrowsinessState(newState: DrowsinessState) {
         viewModelScope.launch {
-            _drowsinessState.update { currentState ->
-                currentState.copy(
-                    alertLevel = newState.alertLevel,
-                    message = newState.message,
-                    isDriverPresent = newState.isDriverPresent,
-                    eyeOpenness = newState.eyeOpenness,
-                    headRotationX = newState.headRotationX,
-                    headRotationY = newState.headRotationY,
-                    headRotationZ = newState.headRotationZ,
-                    drowsinessScore = newState.drowsinessScore,
-                    isDrowsy = newState.isDrowsy
-                )
-            }
-
-            // Log drowsiness event if alert level is not NORMAL
-            if (newState.alertLevel != AlertLevel.NORMAL) {
-                logDrowsinessEvent(
-                    eventType = when (newState.alertLevel) {
-                        AlertLevel.WARNING -> EventType.DROWSY_WARNING
-                        AlertLevel.SEVERE -> EventType.DROWSY_SEVERE
+            try {
+                // Check if alert level has changed
+                if (newState.alertLevel != _drowsinessState.value.alertLevel) {
+                    android.util.Log.d("DrowsinessViewModel", "Alert level changed via updateDrowsinessState from ${_drowsinessState.value.alertLevel} to ${newState.alertLevel}")
+                    soundManager.playAlertSound(newState.alertLevel)
+                }
+                
+                _drowsinessState.update { currentState ->
+                    newState.copy(
+                        sessionId = currentState.sessionId,
+                        sessionEvents = currentState.sessionEvents,
+                        sessionStatistics = currentState.sessionStatistics
+                    )
+                }
+                
+                // Log event if alert level changed
+                if (newState.alertLevel != _drowsinessState.value.alertLevel) {
+                    val eventType = when (newState.alertLevel) {
                         AlertLevel.CRITICAL -> EventType.DROWSY_CRITICAL
-                        else -> EventType.DROWSY_WARNING
-                    },
-                    sessionId = _drowsinessState.value.sessionId,
-                    drowsinessScore = newState.drowsinessScore,
-                    confidence = newState.confidence
-                )
+                        AlertLevel.SEVERE -> EventType.DROWSY_SEVERE
+                        AlertLevel.WARNING -> EventType.DROWSY_WARNING
+                        AlertLevel.NORMAL -> EventType.NORMAL
+                    }
+                    
+                    logDrowsinessEvent(
+                        eventType = eventType,
+                        sessionId = _drowsinessState.value.sessionId,
+                        drowsinessScore = newState.drowsinessScore,
+                        confidence = newState.confidence ?: 1.0f
+                    )
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("DrowsinessViewModel", "Error updating drowsiness state", e)
+                _drowsinessState.update { it.copy(error = "Failed to update state: ${e.message}") }
             }
         }
     }
@@ -246,5 +255,10 @@ class DrowsinessViewModel(application: Application) : AndroidViewModel(applicati
 
     fun clearError() {
         _drowsinessState.update { it.copy(error = null) }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        soundManager.release()
     }
 }
