@@ -1,36 +1,34 @@
 package com.example.drowsydriverapp.data
 
 import android.content.Context
-import androidx.room.*
-import kotlinx.coroutines.flow.Flow
-import com.example.drowsydriverapp.data.converters.EventTypeConverter
+import androidx.room.Database
+import androidx.room.Room
+import androidx.room.RoomDatabase
+import androidx.room.TypeConverters
+import com.example.drowsydriverapp.data.Converters
+import com.example.drowsydriverapp.data.models.DrowsinessEvent
 
-@Dao
-interface DrowsinessEventDao {
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertEvent(event: DrowsinessEvent)
-
-    @Query("SELECT * FROM drowsiness_events WHERE sessionId = :sessionId ORDER BY timestamp ASC")
-    fun getSessionEvents(sessionId: String): Flow<List<DrowsinessEvent>>
-}
-
-@Database(entities = [DrowsinessEvent::class], version = 1)
-@TypeConverters(EventTypeConverter::class)
+@Database(
+    entities = [DrowsinessEvent::class],
+    version = 1,
+    exportSchema = false
+)
+@TypeConverters(Converters::class)
 abstract class DrowsinessDatabase : RoomDatabase() {
     abstract fun drowsinessEventDao(): DrowsinessEventDao
 
     companion object {
         @Volatile
-        private var instance: DrowsinessDatabase? = null
+        private var INSTANCE: DrowsinessDatabase? = null
 
         fun getDatabase(context: Context): DrowsinessDatabase {
-            return instance ?: synchronized(this) {
+            return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     DrowsinessDatabase::class.java,
                     "drowsiness_database"
                 ).build()
-                this.instance = instance
+                INSTANCE = instance
                 instance
             }
         }

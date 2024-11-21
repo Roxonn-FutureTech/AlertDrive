@@ -4,33 +4,28 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.drowsydriverapp.data.DrowsinessRepository
-import com.example.drowsydriverapp.data.DrowsinessEvent
-import com.example.drowsydriverapp.data.EventType
-import com.example.drowsydriverapp.data.models.SessionStatistics
+import com.example.drowsydriverapp.data.models.*
+import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.Face
+import com.google.mlkit.vision.face.FaceDetection
+import com.google.mlkit.vision.face.FaceDetectorOptions
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 import java.util.*
-
-data class DrowsinessState(
-    val isProcessing: Boolean = false,
-    val eyeOpenness: Float = 1f,
-    val blinkCount: Int = 0,
-    val headRotationX: Float = 0f,
-    val headRotationY: Float = 0f,
-    val headRotationZ: Float = 0f,
-    val isDrowsy: Boolean = false,
-    val isDriverPresent: Boolean = false,
-    val sessionId: String = "",
-    val sessionEvents: List<DrowsinessEvent> = emptyList(),
-    val sessionStatistics: SessionStatistics? = null,
-    val error: String? = null
-)
 
 class DrowsinessViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = DrowsinessRepository(application)
-    private val _state = MutableStateFlow(DrowsinessState())
-    val state: StateFlow<DrowsinessState> = _state.asStateFlow()
+    private val _drowsinessState = MutableStateFlow(DrowsinessState())
+    val drowsinessState: StateFlow<DrowsinessState> = _drowsinessState.asStateFlow()
+
+    private val faceDetector = FaceDetection.getClient(
+        FaceDetectorOptions.Builder()
+            .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
+            .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
+            .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL)
+            .build()
+    )
 
     private var lastBlinkTime = 0L
     private var blinkCount = 0
@@ -47,19 +42,20 @@ class DrowsinessViewModel(application: Application) : AndroidViewModel(applicati
     private suspend fun startNewSession() {
         try {
             val sessionId = repository.startNewSession()
-            _state.update { it.copy(sessionId = sessionId) }
+            _drowsinessState.update { it.copy(sessionId = sessionId) }
+            logDrowsinessEvent(EventType.SESSION_START, sessionId, 0f, 1f)
             observeSessionEvents(sessionId)
         } catch (e: Exception) {
-            _state.update { it.copy(error = "Failed to start session: ${e.message}") }
+            _drowsinessState.update { it.copy(error = "Failed to start session: ${e.message}") }
         }
     }
 
     private fun observeSessionEvents(sessionId: String) {
         viewModelScope.launch {
-            repository.getSessionEvents(sessionId)
-                .catch { e -> _state.update { it.copy(error = "Failed to load events: ${e.message}") } }
+            repository.getSessionEventsFlow(sessionId)
+                .catch { e -> _drowsinessState.update { it.copy(error = "Failed to load events: ${e.message}") } }
                 .collect { events ->
-                    _state.update { it.copy(sessionEvents = events) }
+                    _drowsinessState.update { it.copy(sessionEvents = events) }
                     updateSessionStatistics()
                 }
         }
@@ -67,25 +63,35 @@ class DrowsinessViewModel(application: Application) : AndroidViewModel(applicati
 
     private suspend fun updateSessionStatistics() {
         try {
-            val statistics = repository.getSessionStatistics(_state.value.sessionId)
-            _state.update { it.copy(sessionStatistics = statistics) }
+            val statistics = repository.getSessionStatistics(_drowsinessState.value.sessionId)
+            _drowsinessState.update { it.copy(sessionStatistics = statistics) }
         } catch (e: Exception) {
-            _state.update { it.copy(error = "Failed to update statistics: ${e.message}") }
+            _drowsinessState.update { it.copy(error = "Failed to update statistics: ${e.message}") }
         }
     }
 
-    fun processFrame(faces: List<Face>) {
-        viewModelScope.launch {
+    suspend fun processFrame(image: InputImage) {
+        try {
+            val faces = faceDetector.process(image).await()
             val isDriverPresent = faces.isNotEmpty()
+            
             if (isDriverPresent) {
                 val face = faces[0]
                 analyzeFace(face)
+            } else {
+                _drowsinessState.update { it.copy(
+                    isDriverPresent = false,
+                    alertLevel = AlertLevel.WARNING
+                )}
+                logDrowsinessEvent(
+                    eventType = EventType.DRIVER_ABSENT,
+                    sessionId = _drowsinessState.value.sessionId,
+                    drowsinessScore = 0.5f,
+                    confidence = 1f
+                )
             }
-            _state.update { it.copy(isDriverPresent = isDriverPresent) }
-            
-            if (!isDriverPresent) {
-                logDrowsinessEvent(EventType.DRIVER_ABSENT)
-            }
+        } catch (e: Exception) {
+            _drowsinessState.update { it.copy(error = "Failed to process frame: ${e.message}") }
         }
     }
 
@@ -106,12 +112,12 @@ class DrowsinessViewModel(application: Application) : AndroidViewModel(applicati
             val rotY = face.headEulerAngleY
             val rotZ = face.headEulerAngleZ
 
-            // Determine if drowsy based on multiple factors
-            val isDrowsy = averageEyeOpenness < DROWSY_THRESHOLD ||
-                    Math.abs(rotY) > HEAD_ROTATION_THRESHOLD ||
-                    Math.abs(rotZ) > HEAD_ROTATION_THRESHOLD
+            // Calculate drowsiness score
+            val drowsinessScore = calculateDrowsinessScore(averageEyeOpenness, rotY, rotZ, blinkCount)
+            val alertLevel = determineAlertLevel(drowsinessScore)
+            val confidence = calculateConfidence(face)
 
-            _state.update { currentState ->
+            _drowsinessState.update { currentState ->
                 currentState.copy(
                     isProcessing = true,
                     eyeOpenness = averageEyeOpenness,
@@ -119,44 +125,126 @@ class DrowsinessViewModel(application: Application) : AndroidViewModel(applicati
                     headRotationX = rotX,
                     headRotationY = rotY,
                     headRotationZ = rotZ,
-                    isDrowsy = isDrowsy
+                    isDrowsy = drowsinessScore > DROWSY_THRESHOLD,
+                    isDriverPresent = true,
+                    drowsinessScore = drowsinessScore,
+                    confidence = confidence,
+                    alertLevel = alertLevel
                 )
             }
 
-            // Log appropriate event
-            if (isDrowsy) {
-                logDrowsinessEvent(EventType.DROWSY_DETECTED)
-            } else {
-                logDrowsinessEvent(EventType.NORMAL)
+            // Log appropriate event based on drowsiness score
+            val eventType = when {
+                drowsinessScore > 0.8f -> EventType.DROWSY_CRITICAL
+                drowsinessScore > 0.6f -> EventType.DROWSY_SEVERE
+                drowsinessScore > 0.4f -> EventType.DROWSY_WARNING
+                else -> EventType.NORMAL
             }
+
+            logDrowsinessEvent(
+                eventType = eventType,
+                sessionId = _drowsinessState.value.sessionId,
+                drowsinessScore = drowsinessScore,
+                confidence = confidence
+            )
         } catch (e: Exception) {
-            _state.update { it.copy(error = "Failed to analyze face: ${e.message}") }
+            _drowsinessState.update { it.copy(error = "Failed to analyze face: ${e.message}") }
         } finally {
-            _state.update { it.copy(isProcessing = false) }
+            _drowsinessState.update { it.copy(isProcessing = false) }
         }
     }
 
-    private suspend fun logDrowsinessEvent(eventType: EventType) {
+    private fun calculateDrowsinessScore(
+        eyeOpenness: Float,
+        headRotationY: Float,
+        headRotationZ: Float,
+        blinkCount: Int
+    ): Float {
+        val eyeScore = 1f - eyeOpenness
+        val rotationScore = (Math.abs(headRotationY) + Math.abs(headRotationZ)) / (2 * HEAD_ROTATION_THRESHOLD)
+        val blinkScore = (blinkCount / 60f).coerceAtMost(1f)
+        
+        return (eyeScore * 0.5f + rotationScore * 0.3f + blinkScore * 0.2f).coerceIn(0f, 1f)
+    }
+
+    private fun calculateConfidence(face: Face): Float {
+        return face.leftEyeOpenProbability?.let { left ->
+            face.rightEyeOpenProbability?.let { right ->
+                (left + right) / 2
+            }
+        } ?: 0.5f
+    }
+
+    private fun determineAlertLevel(drowsinessScore: Float): AlertLevel {
+        return when {
+            drowsinessScore > 0.8f -> AlertLevel.CRITICAL
+            drowsinessScore > 0.6f -> AlertLevel.SEVERE
+            drowsinessScore > 0.4f -> AlertLevel.WARNING
+            else -> AlertLevel.NORMAL
+        }
+    }
+
+    private suspend fun logDrowsinessEvent(
+        eventType: EventType,
+        sessionId: String,
+        drowsinessScore: Float,
+        confidence: Float
+    ) {
         try {
             repository.logDrowsinessEvent(
                 eventType = eventType,
-                eyeOpenness = _state.value.eyeOpenness,
-                blinkCount = _state.value.blinkCount,
-                headRotationX = _state.value.headRotationX,
-                headRotationY = _state.value.headRotationY,
-                headRotationZ = _state.value.headRotationZ,
-                isDrowsy = _state.value.isDrowsy
+                sessionId = sessionId,
+                eyeOpenness = _drowsinessState.value.eyeOpenness,
+                blinkCount = _drowsinessState.value.blinkCount,
+                headRotationX = _drowsinessState.value.headRotationX,
+                headRotationY = _drowsinessState.value.headRotationY,
+                headRotationZ = _drowsinessState.value.headRotationZ,
+                drowsinessScore = drowsinessScore,
+                confidence = confidence
             )
         } catch (e: Exception) {
-            _state.update { it.copy(error = "Failed to log event: ${e.message}") }
+            _drowsinessState.update { it.copy(error = "Failed to log event: ${e.message}") }
+        }
+    }
+
+    fun updateDrowsinessState(newState: DrowsinessState) {
+        viewModelScope.launch {
+            _drowsinessState.update { currentState ->
+                currentState.copy(
+                    alertLevel = newState.alertLevel,
+                    message = newState.message,
+                    isDriverPresent = newState.isDriverPresent,
+                    eyeOpenness = newState.eyeOpenness,
+                    headRotationX = newState.headRotationX,
+                    headRotationY = newState.headRotationY,
+                    headRotationZ = newState.headRotationZ,
+                    drowsinessScore = newState.drowsinessScore,
+                    isDrowsy = newState.isDrowsy
+                )
+            }
+
+            // Log drowsiness event if alert level is not NORMAL
+            if (newState.alertLevel != AlertLevel.NORMAL) {
+                logDrowsinessEvent(
+                    eventType = when (newState.alertLevel) {
+                        AlertLevel.WARNING -> EventType.DROWSY_WARNING
+                        AlertLevel.SEVERE -> EventType.DROWSY_SEVERE
+                        AlertLevel.CRITICAL -> EventType.DROWSY_CRITICAL
+                        else -> EventType.DROWSY_WARNING
+                    },
+                    sessionId = _drowsinessState.value.sessionId,
+                    drowsinessScore = newState.drowsinessScore,
+                    confidence = newState.confidence
+                )
+            }
         }
     }
 
     suspend fun exportSessionData(): String {
-        return repository.exportSessionData(_state.value.sessionId)
+        return repository.exportSessionData(_drowsinessState.value.sessionId)
     }
 
     fun clearError() {
-        _state.update { it.copy(error = null) }
+        _drowsinessState.update { it.copy(error = null) }
     }
 }

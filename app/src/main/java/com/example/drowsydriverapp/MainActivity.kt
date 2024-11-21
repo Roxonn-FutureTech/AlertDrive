@@ -5,60 +5,98 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.Preview
+import androidx.activity.viewModels
+import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.drowsydriverapp.data.models.AlertLevel
+import com.example.drowsydriverapp.data.models.DrowsinessState
+import com.example.drowsydriverapp.ml.FaceAnalyzer
+import com.example.drowsydriverapp.ui.DrowsinessViewModel
 import com.example.drowsydriverapp.ui.theme.DrowsyDriverAppTheme
-import com.example.drowsydriverapp.viewmodel.DrowsinessViewModel
-import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.face.FaceDetection
+import com.google.mlkit.vision.face.FaceDetectorOptions
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 class MainActivity : ComponentActivity() {
     private lateinit var cameraExecutor: ExecutorService
-
-    private val requestPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            // Permission granted, proceed with camera
-        } else {
-            // Show error message
-        }
-    }
+    private var imageAnalyzer: ImageAnalysis? = null
+    private var preview: Preview? = null
+    private var cameraProvider: ProcessCameraProvider? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        cameraExecutor = Executors.newSingleThreadExecutor()
-
-        if (!hasRequiredPermissions()) {
-            requestPermissionLauncher.launch(Manifest.permission.CAMERA)
+        if (!allPermissionsGranted()) {
+            ActivityCompat.requestPermissions(
+                this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS
+            )
         }
 
+        cameraExecutor = Executors.newSingleThreadExecutor()
+        
         setContent {
             DrowsyDriverAppTheme {
+                val drowsinessViewModel: DrowsinessViewModel = viewModel()
+                val drowsinessState by drowsinessViewModel.drowsinessState.collectAsState()
+                
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    DrowsinessDetectionScreen()
+                    MainContent(
+                        preview = preview,
+                        imageAnalyzer = imageAnalyzer,
+                        cameraProvider = cameraProvider,
+                        drowsinessState = drowsinessState
+                    )
                 }
             }
         }
+
+        startCamera()
+    }
+
+    private fun startCamera() {
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
+        val drowsinessViewModel: DrowsinessViewModel by viewModels()
+
+        cameraProviderFuture.addListener({
+            cameraProvider = cameraProviderFuture.get()
+            preview = Preview.Builder().build()
+            
+            val faceAnalyzer = FaceAnalyzer(drowsinessViewModel)
+            imageAnalyzer = ImageAnalysis.Builder()
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build()
+                .also {
+                    it.setAnalyzer(cameraExecutor, faceAnalyzer)
+                }
+
+            try {
+                cameraProvider?.unbindAll()
+                cameraProvider?.bindToLifecycle(
+                    this,
+                    CameraSelector.DEFAULT_FRONT_CAMERA,
+                    preview!!,
+                    imageAnalyzer!!
+                )
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }, ContextCompat.getMainExecutor(this))
     }
 
     override fun onDestroy() {
@@ -66,133 +104,110 @@ class MainActivity : ComponentActivity() {
         cameraExecutor.shutdown()
     }
 
-    private fun hasRequiredPermissions(): Boolean {
-        return ContextCompat.checkSelfPermission(
-            this,
-            Manifest.permission.CAMERA
-        ) == PackageManager.PERMISSION_GRANTED
+    private fun allPermissionsGranted() = REQUIRED_PERMISSIONS.all {
+        ContextCompat.checkSelfPermission(baseContext, it) == PackageManager.PERMISSION_GRANTED
+    }
+
+    companion object {
+        private const val REQUEST_CODE_PERMISSIONS = 10
+        private val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA)
     }
 }
 
 @Composable
-fun DrowsinessDetectionScreen(
-    viewModel: DrowsinessViewModel = viewModel()
+fun MainContent(
+    preview: Preview?,
+    imageAnalyzer: ImageAnalysis?,
+    cameraProvider: ProcessCameraProvider?,
+    drowsinessState: DrowsinessState
 ) {
-    val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val drowsinessState by viewModel.drowsinessState.collectAsState()
-    
-    val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
-    var previewView by remember { mutableStateOf<PreviewView?>(null) }
-    
-    DisposableEffect(lifecycleOwner) {
-        onDispose {
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        val previewView = remember { mutableStateOf<PreviewView?>(null) }
+        
+        AndroidView(
+            factory = { ctx ->
+                PreviewView(ctx).apply {
+                    implementationMode = PreviewView.ImplementationMode.PERFORMANCE
+                    scaleType = PreviewView.ScaleType.FILL_CENTER
+                }.also { previewView.value = it }
+            },
+            modifier = Modifier.weight(1f)
+        ) { view ->
+            preview?.setSurfaceProvider(view.surfaceProvider)
+        }
+        
+        LaunchedEffect(previewView.value) {
             try {
-                cameraProviderFuture.get()?.unbindAll()
+                cameraProvider?.let { provider ->
+                    provider.unbindAll()
+                    provider.bindToLifecycle(
+                        lifecycleOwner,
+                        CameraSelector.DEFAULT_FRONT_CAMERA,
+                        preview!!,
+                        imageAnalyzer!!
+                    )
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
             }
         }
-    }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
-    ) {
-        // Camera Preview
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-        ) {
-            AndroidView(
-                factory = { ctx ->
-                    PreviewView(ctx).also {
-                        it.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-                        previewView = it
-                    }
-                },
-                modifier = Modifier.fillMaxSize()
-            )
-            
-            LaunchedEffect(previewView) {
-                previewView?.let { preview ->
-                    try {
-                        val cameraProvider = cameraProviderFuture.get()
-                        
-                        val previewUseCase = Preview.Builder()
-                            .build()
-                            .also {
-                                it.setSurfaceProvider(preview.surfaceProvider)
-                            }
-                        
-                        val imageAnalyzer = ImageAnalysis.Builder()
-                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                            .build()
-                            .apply {
-                                setAnalyzer(context.mainExecutor) { imageProxy ->
-                                    val mediaImage = imageProxy.image
-                                    if (mediaImage != null) {
-                                        val image = InputImage.fromMediaImage(
-                                            mediaImage,
-                                            imageProxy.imageInfo.rotationDegrees
-                                        )
-                                        val task = viewModel.processFrame(image)
-                                        if (task != null) {
-                                            task.addOnCompleteListener {
-                                                imageProxy.close()
-                                            }
-                                        } else {
-                                            imageProxy.close()
-                                        }
-                                    } else {
-                                        imageProxy.close()
-                                    }
-                                }
-                            }
-                        
-                        cameraProvider.unbindAll()
-                        cameraProvider.bindToLifecycle(
-                            lifecycleOwner,
-                            CameraSelector.DEFAULT_FRONT_CAMERA,
-                            previewUseCase,
-                            imageAnalyzer
-                        )
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
-                }
+        // Alert UI based on drowsiness state
+        when (drowsinessState.alertLevel) {
+            AlertLevel.WARNING -> {
+                AlertCard(
+                    title = "Warning",
+                    message = "You appear to be getting drowsy. Consider taking a break.",
+                    color = MaterialTheme.colorScheme.tertiary
+                )
             }
+            AlertLevel.SEVERE -> {
+                AlertCard(
+                    title = "Severe Warning",
+                    message = "High drowsiness detected! Please pull over safely.",
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+            AlertLevel.CRITICAL -> {
+                AlertCard(
+                    title = "Critical Alert",
+                    message = "Immediate action required! Pull over now!",
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+            else -> {}
         }
-        
-        // Status and Controls
+    }
+}
+
+@Composable
+fun AlertCard(
+    title: String,
+    message: String,
+    color: Color
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        colors = CardDefaults.cardColors(containerColor = color)
+    ) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 8.dp)
+            modifier = Modifier.padding(16.dp)
         ) {
             Text(
-                text = "Driver Status: ${if (drowsinessState.isDriverPresent) "Present" else "Not Detected"}",
-                style = MaterialTheme.typography.bodyLarge
+                text = title,
+                style = MaterialTheme.typography.titleLarge,
+                color = Color.White
             )
-            if (drowsinessState.isDriverPresent) {
-                Text(
-                    text = "Drowsiness: ${if (drowsinessState.isDrowsy) "Alert! Driver may be drowsy" else "Normal"}",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = if (drowsinessState.isDrowsy) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-                )
-                Text(
-                    text = "Blink Count: ${drowsinessState.blinkCount}",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                LinearProgressIndicator(
-                    progress = drowsinessState.eyeOpenness,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 8.dp)
-                )
-            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodyLarge,
+                color = Color.White
+            )
         }
     }
 }
