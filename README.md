@@ -104,9 +104,9 @@ If you use this app in your research, please cite:
 ```bibtex
 @software{drowsy_driver_app,
   author = {Dinesh Rampalli},
-  title = {Drowsy Driver Safety App},
+  title = {Drowsy Driver Alert Safety App},
   year = {2024},
   publisher = {GitHub},
-  url = {https://github.com/dineshroxonn/DrowsyDriverApp}
+  url = {https://github.com/Roxonn-FutureTech/DrowsyDriverAlertApp}
 }
 ```
