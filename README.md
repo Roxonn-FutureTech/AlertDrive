@@ -93,9 +93,9 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 
 ## Contact 📧
 
-Your Name - [@yourtwitter](https://x.com/DineshR15567042?t=8Vstt8g7fKGiAnUBqtxRCQ&s=09)
+Your Name - [@DineshR15567042](https://x.com/DineshR15567042?t=8Vstt8g7fKGiAnUBqtxRCQ&s=09)
 
-Project Link: [https://github.com/dineshroxonn/DrowsyDriverApp](https://github.com/dineshroxonn/DrowsyDriverApp)
+Project Link: [https://github.com/Roxonn-FutureTech/DrowsyDriverApp](https://github.com/Roxonn-FutureTech/DrowsyDriverApp)
 
 ## Citation 📚
 
