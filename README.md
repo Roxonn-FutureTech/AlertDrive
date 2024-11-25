@@ -1,4 +1,4 @@
-# Drowsy Driver Safety App 🚗
+# Drowsy Driver Alert Safety App 🚗
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![API](https://img.shields.io/badge/API-24%2B-brightgreen.svg)](https://android-arsenal.com/api?level=24)
@@ -95,7 +95,7 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 
 Your Name - [@DineshR15567042](https://x.com/DineshR15567042?t=8Vstt8g7fKGiAnUBqtxRCQ&s=09)
 
-Project Link: [https://github.com/Roxonn-FutureTech/DrowsyDriverApp](https://github.com/Roxonn-FutureTech/DrowsyDriverApp)
+Project Link: [https://github.com/Roxonn-FutureTech/DrowsyDriverAlertApp](https://github.com/Roxonn-FutureTech/DrowsyDriverAlertApp)
 
 ## Citation 📚
 
